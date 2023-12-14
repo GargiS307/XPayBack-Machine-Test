@@ -1,10 +1,9 @@
-# main.py
 from fastapi import FastAPI, HTTPException, Depends
-from sqlalchemy import create_engine, Column, String, Integer, MetaData, Table
+from sqlalchemy import create_engine, Column, String, Integer, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, relationship
 from databases import Database
-from motor.motor_asyncio import AsyncIOMotorClient
+from passlib.context import CryptContext
 
 DATABASE_URL = "postgresql://user:password@localhost/dbname"
 POSTGRES_ENGINE = create_engine(DATABASE_URL)
@@ -14,23 +13,6 @@ metadata = MetaData()
 
 Base = declarative_base()
 
-# PostgreSQL User Model
-class User(Base):
-    __tablename__ = "users"
-
-    id = Column(Integer, primary_key=True, index=True)
-    full_name = Column(String, index=True)
-    email = Column(String, unique=True, index=True)
-    password = Column(String)
-    phone = Column(String)
-
-# MongoDB Connection
-MONGO_URL = "mongodb://localhost:27017"
-mongo_client = AsyncIOMotorClient(MONGO_URL)
-mongo_db = mongo_client["profile_pictures"]
-
-app = FastAPI()
-
 # Dependency to get the current database session
 def get_db():
     db = POSTGRES_ENGINE.connect()
@@ -39,14 +21,46 @@ def get_db():
     finally:
         db.close()
 
-# Dependency to get the MongoDB collection for profile pictures
-async def get_profile_pictures_collection():
-    return mongo_db.get_collection("profile_pictures")
+# Define Users table
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    full_name = Column(String, index=True)
+    email = Column(String, unique=True, index=True)
+    password = Column(String)
+    phone = Column(String, unique=True, index=True)
+
+    # Relationship with Profile table
+    profile = relationship("Profile", uselist=False, back_populates="user")
+
+# Define Profile table
+class Profile(Base):
+    __tablename__ = "profiles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    profile_picture = Column(String)
+    user_id = Column(Integer, ForeignKey("users.id"))
+
+    # Relationship with Users table
+    user = relationship("User", back_populates="profile")
+
+# Create tables
+Base.metadata.create_all(bind=POSTGRES_ENGINE)
+
+app = FastAPI()
 
 # Dependency to check if email already exists
 async def does_email_exist(email: str, db: Session = Depends(get_db)):
-    query = db.query(User).filter(User.email == email)
-    return db.query(query.exists()).scalar()
+    return db.query(User).filter(User.email == email).first()
+
+# Dependency to check if phone already exists
+async def does_phone_exist(phone: str, db: Session = Depends(get_db)):
+    return db.query(User).filter(User.phone == phone).first()
+
+# Dependency to get the current user from the token
+async def get_user_by_id(user_id: int, db: Session = Depends(get_db)):
+    return db.query(User).filter(User.id == user_id).first()
 
 @app.post("/register/")
 async def register_user(
@@ -57,34 +71,47 @@ async def register_user(
     profile_picture: str,
     db: Session = Depends(get_db)
 ):
-    # Check if the email already exists in PostgreSQL
+    # Check if the email already exists
     if await does_email_exist(email, db):
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # Insert user into PostgreSQL
-    new_user = User(full_name=full_name, email=email, password=password, phone=phone)
+    # Check if the phone already exists
+    if await does_phone_exist(phone, db):
+        raise HTTPException(status_code=400, detail="Phone already registered")
+
+    # Hash the password
+    hashed_password = get_password_hash(password)
+
+    # Insert user into Users table
+    new_user = User(full_name=full_name, email=email, password=hashed_password, phone=phone)
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
-    # Insert profile picture into MongoDB
-    profile_pictures_collection = await get_profile_pictures_collection()
-    await profile_pictures_collection.insert_one(
-        {"user_id": new_user.id, "profile_picture": profile_picture}
-    )
+    # Insert profile picture into Profile table
+    new_profile = Profile(profile_picture=profile_picture, user_id=new_user.id)
+    db.add(new_profile)
+    db.commit()
+    db.refresh(new_profile)
 
-    return {"user_id": new_user.id, "full_name": full_name, "email": email, "phone": phone}
+    return {
+        "user_id": new_user.id,
+        "full_name": full_name,
+        "email": email,
+        "phone": phone,
+        "profile_picture": profile_picture,
+    }
 
 @app.get("/user/{user_id}")
 async def get_user_details(user_id: int, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.id == user_id).first()
+    user = await get_user_by_id(user_id, db)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    return {"user_id": user.id, "full_name": user.full_name, "email": user.email, "phone": user.phone}
-
-if __name__ == "__main__":
-    import uvicorn
-
-    Base.metadata.create_all(bind=POSTGRES_ENGINE)
-    uvicorn.run(app, host="127.0.0.1", port=8000, reload=True)
+    return {
+        "user_id": user.id,
+        "full_name": user.full_name,
+        "email": user.email,
+        "phone": user.phone,
+        "profile_picture": user.profile.profile_picture,
+    }
