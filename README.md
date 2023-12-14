@@ -1,7 +1,3 @@
 # XPayBack-Machine-Test
-For PostgreSQL, we'll use databases and sqlalchemy along with asyncpg as the driver, and for MongoDB, we'll use motor.
-
-we will first install the package then start Programming:
-pip install fastapi uvicorn databases[postgresql] motor
-
-
+Question 2
+It includes registration fields such as Full Name, Email, Password, Phone, and Profile Picture. The program uses two tables, Users and Profile, in PostgreSQL to store user information and profile pictures. It checks if the email and phone already exist before allowing registration.  
