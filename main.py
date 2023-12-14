@@ -1,10 +1,10 @@
+# main.py
 from fastapi import FastAPI, HTTPException, Depends
 from sqlalchemy import create_engine, Column, String, Integer, MetaData, Table
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session
 from databases import Database
 from motor.motor_asyncio import AsyncIOMotorClient
-from passlib.context import CryptContext
 
 DATABASE_URL = "postgresql://user:password@localhost/dbname"
 POSTGRES_ENGINE = create_engine(DATABASE_URL)
@@ -23,7 +23,6 @@ class User(Base):
     email = Column(String, unique=True, index=True)
     password = Column(String)
     phone = Column(String)
-
 
 # MongoDB Connection
 MONGO_URL = "mongodb://localhost:27017"
@@ -44,28 +43,6 @@ def get_db():
 async def get_profile_pictures_collection():
     return mongo_db.get_collection("profile_pictures")
 
-# Dependency to get the current user from the token
-async def get_current_user(token: str = Depends(oauth2_scheme)):
-    credentials_exception = HTTPException(
-        status_code=401,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-
-    query = users.select().where(users.c.email == email)
-    user = await database.fetch_one(query)
-    if user is None:
-        raise credentials_exception
-
-    return user
-
 # Dependency to check if email already exists
 async def does_email_exist(email: str, db: Session = Depends(get_db)):
     query = db.query(User).filter(User.email == email)
@@ -84,11 +61,8 @@ async def register_user(
     if await does_email_exist(email, db):
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # Hash the password
-    hashed_password = get_password_hash(password)
-
     # Insert user into PostgreSQL
-    new_user = User(full_name=full_name, email=email, password=hashed_password, phone=phone)
+    new_user = User(full_name=full_name, email=email, password=password, phone=phone)
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
@@ -100,6 +74,14 @@ async def register_user(
     )
 
     return {"user_id": new_user.id, "full_name": full_name, "email": email, "phone": phone}
+
+@app.get("/user/{user_id}")
+async def get_user_details(user_id: int, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    return {"user_id": user.id, "full_name": user.full_name, "email": user.email, "phone": user.phone}
 
 if __name__ == "__main__":
     import uvicorn
