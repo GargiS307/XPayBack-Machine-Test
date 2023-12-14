@@ -1,4 +1,3 @@
-# main.py
 from fastapi import FastAPI, HTTPException, Depends
 from sqlalchemy import create_engine, Column, String, Integer, MetaData, Table
 from sqlalchemy.ext.declarative import declarative_base
